@@ -38,6 +38,7 @@ typedef struct TCPContext {
     int open_timeout;
     int rw_timeout;
     int listen_timeout;
+    char *dns_cache_ip;
 } TCPContext;
 
 #define OFFSET(x) offsetof(TCPContext, x)
@@ -46,7 +47,8 @@ typedef struct TCPContext {
 static const AVOption options[] = {
     { "listen",          "Listen for incoming connections",  OFFSET(listen),         AV_OPT_TYPE_INT, { .i64 = 0 },     0,       1,       .flags = D|E },
     { "timeout",     "set timeout (in microseconds) of socket I/O operations", OFFSET(rw_timeout),     AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
-    { "listen_timeout",  "Connection awaiting timeout (in milliseconds)",      OFFSET(listen_timeout), AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
+    { "listen_timeout",  "Connection awaiting timeout",      OFFSET(listen_timeout), AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
+    { "dns_cache_ip", "DNS Cache ip", OFFSET(dns_cache_ip), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D|E },
     { NULL }
 };
 
@@ -67,6 +69,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     char buf[256];
     int ret;
     char hostname[1024],proto[1024],path[1024];
+    const char *host_or_ip;
     char portstr[10];
     s->open_timeout = 5000000;
 
@@ -78,6 +81,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         av_log(h, AV_LOG_ERROR, "Port missing in uri\n");
         return AVERROR(EINVAL);
     }
+    av_log(h, AV_LOG_INFO, "uri=%s.\n", uri);
     p = strchr(uri, '?');
     if (p) {
         if (av_find_info_tag(buf, sizeof(buf), "listen", p)) {
@@ -98,15 +102,22 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
         s->open_timeout =
         h->rw_timeout   = s->rw_timeout;
     }
-    hints.ai_family = AF_UNSPEC;
+    if (s->dns_cache_ip) {
+        host_or_ip = s->dns_cache_ip;
+    } else {
+        host_or_ip = hostname;
+    }
+    hints.ai_family = AF_UNSPEC; 
     hints.ai_socktype = SOCK_STREAM;
     snprintf(portstr, sizeof(portstr), "%d", port);
     if (s->listen)
         hints.ai_flags |= AI_PASSIVE;
+    av_log(h, AV_LOG_INFO, "getaddrinfo start host=%s.\n", host_or_ip);
     if (!hostname[0])
         ret = getaddrinfo(NULL, portstr, &hints, &ai);
     else
-        ret = getaddrinfo(hostname, portstr, &hints, &ai);
+        ret = getaddrinfo(host_or_ip, portstr, &hints, &ai);
+    av_log(h, AV_LOG_INFO, "getaddrinfo end.\n");
     if (ret) {
         av_log(h, AV_LOG_ERROR,
                "Failed to resolve hostname %s: %s\n",
