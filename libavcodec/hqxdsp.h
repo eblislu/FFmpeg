@@ -1,6 +1,5 @@
 /*
- * sndio play and grab interface
- * Copyright (c) 2010 Jacob Meuser
+ * HQX DSP routines
  *
  * This file is part of FFmpeg.
  *
@@ -19,30 +18,23 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AVDEVICE_SNDIO_COMMON_H
-#define AVDEVICE_SNDIO_COMMON_H
+/**
+ * @file
+ * HQX DSP routines
+ */
 
+#ifndef AVCODEC_HQXDSP_H
+#define AVCODEC_HQXDSP_H
+
+#include <stddef.h>
 #include <stdint.h>
-#include <sndio.h>
 
-#include "libavutil/log.h"
-#include "avdevice.h"
+typedef struct HQXDSPContext {
+    void (*idct_put)(uint16_t *dst, ptrdiff_t stride,
+                     int16_t *block, const uint8_t *quant);
+} HQXDSPContext;
 
-typedef struct SndioData {
-    AVClass *class;
-    struct sio_hdl *hdl;
-    enum AVCodecID codec_id;
-    int64_t hwpos;
-    int64_t softpos;
-    uint8_t *buffer;
-    int bps;
-    int buffer_size;
-    int buffer_offset;
-    int channels;
-    int sample_rate;
-} SndioData;
+void ff_hqxdsp_init(HQXDSPContext *c);
 
-int ff_sndio_open(AVFormatContext *s1, int is_output, const char *audio_device);
-int ff_sndio_close(SndioData *s);
+#endif /* AVCODEC_HQXDSP_H */
 
-#endif /* AVDEVICE_SNDIO_COMMON_H */

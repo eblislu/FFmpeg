@@ -352,7 +352,6 @@ void term_init(void)
         signal(SIGQUIT, sigterm_handler); /* Quit (POSIX).  */
     }
 #endif
-    avformat_network_deinit();
 
     signal(SIGINT , sigterm_handler); /* Interrupt (ANSI).    */
     signal(SIGTERM, sigterm_handler); /* Termination (ANSI).  */
@@ -1030,6 +1029,9 @@ static void do_video_out(AVFormatContext *s,
         in_picture = ost->last_frame;
     } else
         in_picture = next_picture;
+
+    if (!in_picture)
+        return;
 
     in_picture->pts = ost->sync_opts;
 
@@ -3644,6 +3646,8 @@ static int process_input(int file_index)
             uint8_t *dst_data;
 
             if (av_packet_get_side_data(&pkt, src_sd->type, NULL))
+                continue;
+            if (ist->autorotate && src_sd->type == AV_PKT_DATA_DISPLAYMATRIX)
                 continue;
 
             dst_data = av_packet_new_side_data(&pkt, src_sd->type, src_sd->size);

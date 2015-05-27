@@ -56,6 +56,7 @@ typedef struct WebMDashMuxContext {
     int chunk_duration;
     char *utc_timing_url;
     double time_shift_buffer_depth;
+    int minimum_update_period;
     int debug_mode;
 } WebMDashMuxContext;
 
@@ -91,9 +92,6 @@ static void write_header(AVFormatContext *s)
 {
     WebMDashMuxContext *w = s->priv_data;
     double min_buffer_time = 1.0;
-    time_t local_time;
-    struct tm *gmt, gmt_buffer;
-    char *gmt_iso = av_malloc(21);
     avio_printf(s->pb, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     avio_printf(s->pb, "<MPD\n");
     avio_printf(s->pb, "  xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
@@ -108,23 +106,25 @@ static void write_header(AVFormatContext *s)
     avio_printf(s->pb, "  profiles=\"%s\"%s",
                 w->is_live ? "urn:mpeg:dash:profile:isoff-live:2011" : "urn:webm:dash:profile:webm-on-demand:2012",
                 w->is_live ? "\n" : ">\n");
-    time(&local_time);
-    gmt = gmtime_r(&local_time, &gmt_buffer);
-    strftime(gmt_iso, 21, "%FT%TZ", gmt);
-    if (w->debug_mode) {
-        av_strlcpy(gmt_iso, "", 1);
-    }
     if (w->is_live) {
+        time_t local_time = time(NULL);
+        struct tm gmt_buffer;
+        struct tm *gmt = gmtime_r(&local_time, &gmt_buffer);
+        char gmt_iso[21];
+        strftime(gmt_iso, 21, "%Y-%m-%dT%H:%M:%SZ", gmt);
+        if (w->debug_mode) {
+            av_strlcpy(gmt_iso, "", 1);
+        }
         avio_printf(s->pb, "  availabilityStartTime=\"%s\"\n", gmt_iso);
-        avio_printf(s->pb, "  timeShiftBufferDepth=\"PT%gS\"", w->time_shift_buffer_depth);
+        avio_printf(s->pb, "  timeShiftBufferDepth=\"PT%gS\"\n", w->time_shift_buffer_depth);
+        avio_printf(s->pb, "  minimumUpdatePeriod=\"PT%dS\"", w->minimum_update_period);
         avio_printf(s->pb, ">\n");
-        avio_printf(s->pb, "<UTCTiming\n");
-        avio_printf(s->pb, "  schemeIdUri=\"%s\"\n",
-                    w->utc_timing_url ? "urn:mpeg:dash:utc:http-iso:2014" : "urn:mpeg:dash:utc:direct:2012");
-        avio_printf(s->pb, "  value=\"%s\"/>\n",
-                    w->utc_timing_url ? w->utc_timing_url : gmt_iso);
+        if (w->utc_timing_url) {
+            avio_printf(s->pb, "<UTCTiming\n");
+            avio_printf(s->pb, "  schemeIdUri=\"urn:mpeg:dash:utc:http-iso:2014\"\n");
+            avio_printf(s->pb, "  value=\"%s\"/>\n", w->utc_timing_url);
+        }
     }
-    av_free(gmt_iso);
 }
 
 static void write_footer(AVFormatContext *s)
@@ -181,7 +181,7 @@ static int write_representation(AVFormatContext *s, AVStream *stream, char *id,
     AVDictionaryEntry *bandwidth = av_dict_get(stream->metadata, BANDWIDTH, NULL, 0);
     if ((w->is_live && (!filename)) ||
         (!w->is_live && (!irange || !cues_start || !cues_end || !filename || !bandwidth))) {
-        return -1;
+        return AVERROR_INVALIDDATA;
     }
     avio_printf(s->pb, "<Representation id=\"%s\"", id);
     // FIXME: For live, This should be obtained from the input file or as an AVOption.
@@ -254,6 +254,16 @@ static int check_matching_sample_rate(AVFormatContext *s, AdaptationSet *as) {
     return 1;
 }
 
+static void free_adaptation_sets(AVFormatContext *s) {
+    WebMDashMuxContext *w = s->priv_data;
+    int i;
+    for (i = 0; i < w->nb_as; i++) {
+        av_freep(&w->as[i].streams);
+    }
+    av_freep(&w->as);
+    w->nb_as = 0;
+}
+
 /*
  * Parses a live header filename and computes the representation id,
  * initialization pattern and the media pattern. Pass NULL if you don't want to
@@ -276,9 +286,9 @@ static int parse_filename(char *filename, char **representation_id,
         underscore_pos = temp_pos + 1;
         temp_pos = av_stristr(temp_pos + 1, "_");
     }
-    if (!underscore_pos) return -1;
+    if (!underscore_pos) return AVERROR_INVALIDDATA;
     period_pos = av_stristr(underscore_pos, ".");
-    if (!period_pos) return -1;
+    if (!period_pos) return AVERROR_INVALIDDATA;
     *(underscore_pos - 1) = 0;
     if (representation_id) {
         *representation_id = av_malloc(period_pos - underscore_pos + 1);
@@ -375,20 +385,23 @@ static int write_adaptation_set(AVFormatContext *s, int as_index)
 
     for (i = 0; i < as->nb_streams; i++) {
         char *representation_id = NULL;
+        int ret;
         if (w->is_live) {
             AVDictionaryEntry *filename =
                 av_dict_get(s->streams[as->streams[i]]->metadata, FILENAME, NULL, 0);
             if (!filename ||
-                parse_filename(filename->value, &representation_id, NULL, NULL)) {
-                return -1;
+                (ret = parse_filename(filename->value, &representation_id, NULL, NULL))) {
+                return ret;
             }
         } else {
             representation_id = av_asprintf("%d", w->representation_id++);
-            if (!representation_id) return -1;
+            if (!representation_id) return AVERROR(ENOMEM);
         }
-        write_representation(s, s->streams[as->streams[i]], representation_id,
-                             !width_in_as, !height_in_as, !sample_rate_in_as);
+        ret = write_representation(s, s->streams[as->streams[i]],
+                                   representation_id, !width_in_as,
+                                   !height_in_as, !sample_rate_in_as);
         av_free(representation_id);
+        if (ret) return ret;
     }
     avio_printf(s->pb, "</AdaptationSet>\n");
     return 0;
@@ -418,9 +431,11 @@ static int parse_adaptation_sets(AVFormatContext *s)
         if (*p == ' ')
             continue;
         else if (state == new_set && !strncmp(p, "id=", 3)) {
-            w->as = av_realloc(w->as, sizeof(*w->as) * ++w->nb_as);
-            if (w->as == NULL)
+            void *mem = av_realloc(w->as, sizeof(*w->as) * (w->nb_as + 1));
+            if (mem == NULL)
                 return AVERROR(ENOMEM);
+            w->as = mem;
+            ++w->nb_as;
             w->as[w->nb_as - 1].nb_streams = 0;
             w->as[w->nb_as - 1].streams = NULL;
             p += 3; // consume "id="
@@ -455,8 +470,13 @@ static int webm_dash_manifest_write_header(AVFormatContext *s)
 {
     int i;
     double start = 0.0;
+    int ret;
     WebMDashMuxContext *w = s->priv_data;
-    parse_adaptation_sets(s);
+    ret = parse_adaptation_sets(s);
+    if (ret < 0) {
+        free_adaptation_sets(s);
+        return ret;
+    }
     write_header(s);
     avio_printf(s->pb, "<Period id=\"0\"");
     avio_printf(s->pb, " start=\"PT%gS\"", start);
@@ -466,7 +486,11 @@ static int webm_dash_manifest_write_header(AVFormatContext *s)
     avio_printf(s->pb, " >\n");
 
     for (i = 0; i < w->nb_as; i++) {
-        if (write_adaptation_set(s, i) < 0) return -1;
+        ret = write_adaptation_set(s, i);
+        if (ret < 0) {
+            free_adaptation_sets(s);
+            return ret;
+        }
     }
 
     avio_printf(s->pb, "</Period>\n");
@@ -481,12 +505,7 @@ static int webm_dash_manifest_write_packet(AVFormatContext *s, AVPacket *pkt)
 
 static int webm_dash_manifest_write_trailer(AVFormatContext *s)
 {
-    WebMDashMuxContext *w = s->priv_data;
-    int i;
-    for (i = 0; i < w->nb_as; i++) {
-        av_freep(&w->as[i].streams);
-    }
-    av_freep(&w->as);
+    free_adaptation_sets(s);
     return 0;
 }
 
@@ -499,6 +518,7 @@ static const AVOption options[] = {
     { "chunk_duration_ms", "duration of each chunk (in milliseconds)", OFFSET(chunk_duration), AV_OPT_TYPE_INT, {.i64 = 1000}, 0, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM },
     { "utc_timing_url", "URL of the page that will return the UTC timestamp in ISO format", OFFSET(utc_timing_url), AV_OPT_TYPE_STRING, { 0 }, 0, 0, AV_OPT_FLAG_ENCODING_PARAM },
     { "time_shift_buffer_depth", "Smallest time (in seconds) shifting buffer for which any Representation is guaranteed to be available.", OFFSET(time_shift_buffer_depth), AV_OPT_TYPE_DOUBLE, { .dbl = 60.0 }, 1.0, DBL_MAX, AV_OPT_FLAG_ENCODING_PARAM },
+    { "minimum_update_period", "Minimum Update Period (in seconds) of the manifest.", OFFSET(minimum_update_period), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM },
     { NULL },
 };
 

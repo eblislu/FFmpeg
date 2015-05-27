@@ -34,7 +34,7 @@
 #ifdef DEBUG
 #    define hex_dump_debug(class, buf, size) av_hex_dump_log(class, AV_LOG_DEBUG, buf, size)
 #else
-#    define hex_dump_debug(class, buf, size)
+#    define hex_dump_debug(class, buf, size) do { if (0) av_hex_dump_log(class, AV_LOG_DEBUG, buf, size); } while(0)
 #endif
 
 typedef struct AVCodecTag {
@@ -97,6 +97,8 @@ struct AVFormatInternal {
     AVRational offset_timebase;
 
     int inject_global_side_data;
+
+    int avoid_negative_ts_use_pts;
 };
 
 #ifdef __GNUC__
@@ -484,5 +486,8 @@ enum AVWriteUncodedFrameFlags {
  * Copies the whilelists from one context to the other
  */
 int ff_copy_whitelists(AVFormatContext *dst, AVFormatContext *src);
+
+int ffio_open2_wrapper(struct AVFormatContext *s, AVIOContext **pb, const char *url, int flags,
+                       const AVIOInterruptCB *int_cb, AVDictionary **options);
 
 #endif /* AVFORMAT_INTERNAL_H */

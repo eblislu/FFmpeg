@@ -88,12 +88,7 @@ static void remove_sps(HEVCContext *s, int id)
             if (s->pps_list[i] && ((HEVCPPS*)s->pps_list[i]->data)->sps_id == id)
                 remove_pps(s, i);
 
-        if (s->sps_list[id] && s->sps == (HEVCSPS*)s->sps_list[id]->data) {
-            av_buffer_unref(&s->current_sps);
-            s->current_sps = av_buffer_ref(s->sps_list[id]);
-            if (!s->current_sps)
-                s->sps = NULL;
-        }
+        av_assert0(!(s->sps_list[id] && s->sps == (HEVCSPS*)s->sps_list[id]->data));
     }
     av_buffer_unref(&s->sps_list[id]);
 }
@@ -467,7 +462,8 @@ int ff_hevc_decode_nal_vps(HEVCContext *s)
 
     vps->vps_max_layer_id   = get_bits(gb, 6);
     vps->vps_num_layer_sets = get_ue_golomb_long(gb) + 1;
-    if ((vps->vps_num_layer_sets - 1LL) * (vps->vps_max_layer_id + 1LL) > get_bits_left(gb)) {
+    if (vps->vps_num_layer_sets < 1 || vps->vps_num_layer_sets > 1024 ||
+        (vps->vps_num_layer_sets - 1LL) * (vps->vps_max_layer_id + 1LL) > get_bits_left(gb)) {
         av_log(s->avctx, AV_LOG_ERROR, "too many layer_id_included_flags\n");
         goto err;
     }
@@ -484,6 +480,11 @@ int ff_hevc_decode_nal_vps(HEVCContext *s)
         if (vps->vps_poc_proportional_to_timing_flag)
             vps->vps_num_ticks_poc_diff_one = get_ue_golomb_long(gb) + 1;
         vps->vps_num_hrd_parameters = get_ue_golomb_long(gb);
+        if (vps->vps_num_hrd_parameters > (unsigned)vps->vps_num_layer_sets) {
+            av_log(s->avctx, AV_LOG_ERROR,
+                   "vps_num_hrd_parameters %d is invalid\n", vps->vps_num_hrd_parameters);
+            goto err;
+        }
         for (i = 0; i < vps->vps_num_hrd_parameters; i++) {
             int common_inf_present = 1;
 
@@ -1109,6 +1110,19 @@ int ff_hevc_decode_nal_sps(HEVCContext *s)
                          sps->log2_diff_max_min_coding_block_size;
     sps->log2_min_pu_size = sps->log2_min_cb_size - 1;
 
+    if (sps->log2_ctb_size > MAX_LOG2_CTB_SIZE) {
+        av_log(s->avctx, AV_LOG_ERROR, "CTB size out of range: 2^%d\n", sps->log2_ctb_size);
+        goto err;
+    }
+    if (sps->log2_ctb_size < 4) {
+        av_log(s->avctx,
+               AV_LOG_ERROR,
+               "log2_ctb_size %d differs from the bounds of any known profile\n",
+               sps->log2_ctb_size);
+        avpriv_request_sample(s->avctx, "log2_ctb_size %d", sps->log2_ctb_size);
+        goto err;
+    }
+
     sps->ctb_width  = (sps->width  + (1 << sps->log2_ctb_size) - 1) >> sps->log2_ctb_size;
     sps->ctb_height = (sps->height + (1 << sps->log2_ctb_size) - 1) >> sps->log2_ctb_size;
     sps->ctb_size   = sps->ctb_width * sps->ctb_height;
@@ -1123,24 +1137,12 @@ int ff_hevc_decode_nal_sps(HEVCContext *s)
 
     sps->qp_bd_offset = 6 * (sps->bit_depth - 8);
 
-    if (sps->width  & ((1 << sps->log2_min_cb_size) - 1) ||
-        sps->height & ((1 << sps->log2_min_cb_size) - 1)) {
+    if (av_mod_uintp2(sps->width, sps->log2_min_cb_size) ||
+        av_mod_uintp2(sps->height, sps->log2_min_cb_size)) {
         av_log(s->avctx, AV_LOG_ERROR, "Invalid coded frame dimensions.\n");
         goto err;
     }
 
-    if (sps->log2_ctb_size > MAX_LOG2_CTB_SIZE) {
-        av_log(s->avctx, AV_LOG_ERROR, "CTB size out of range: 2^%d\n", sps->log2_ctb_size);
-        goto err;
-    }
-    if (sps->log2_ctb_size < 4) {
-        av_log(s->avctx,
-               AV_LOG_ERROR,
-               "log2_ctb_size %d differs from the bounds of any known profile\n",
-               sps->log2_ctb_size);
-        avpriv_request_sample(s->avctx, "log2_ctb_size %d", sps->log2_ctb_size);
-        goto err;
-    }
     if (sps->max_transform_hierarchy_depth_inter > sps->log2_ctb_size - sps->log2_min_tb_size) {
         av_log(s->avctx, AV_LOG_ERROR, "max_transform_hierarchy_depth_inter out of range: %d\n",
                sps->max_transform_hierarchy_depth_inter);
@@ -1355,14 +1357,14 @@ int ff_hevc_decode_nal_pps(HEVCContext *s)
     if (pps->tiles_enabled_flag) {
         pps->num_tile_columns = get_ue_golomb_long(gb) + 1;
         pps->num_tile_rows    = get_ue_golomb_long(gb) + 1;
-        if (pps->num_tile_columns == 0 ||
+        if (pps->num_tile_columns <= 0 ||
             pps->num_tile_columns >= sps->width) {
             av_log(s->avctx, AV_LOG_ERROR, "num_tile_columns_minus1 out of range: %d\n",
                    pps->num_tile_columns - 1);
             ret = AVERROR_INVALIDDATA;
             goto err;
         }
-        if (pps->num_tile_rows == 0 ||
+        if (pps->num_tile_rows <= 0 ||
             pps->num_tile_rows >= sps->height) {
             av_log(s->avctx, AV_LOG_ERROR, "num_tile_rows_minus1 out of range: %d\n",
                    pps->num_tile_rows - 1);

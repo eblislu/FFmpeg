@@ -442,7 +442,8 @@ static int compute_pkt_fields2(AVFormatContext *s, AVStream *st, AVPacket *pkt)
     int num, den, i;
     int frame_size;
 
-    av_dlog(s, "compute_pkt_fields2: pts:%s dts:%s cur_dts:%s b:%d size:%d st:%d\n",
+    if (s->debug & FF_FDEBUG_TS)
+        av_log(s, AV_LOG_TRACE, "compute_pkt_fields2: pts:%s dts:%s cur_dts:%s b:%d size:%d st:%d\n",
             av_ts2str(pkt->pts), av_ts2str(pkt->dts), av_ts2str(st->cur_dts), delay, pkt->size, pkt->stream_index);
 
     if (pkt->duration < 0 && st->codec->codec_type != AVMEDIA_TYPE_SUBTITLE) {
@@ -502,8 +503,10 @@ static int compute_pkt_fields2(AVFormatContext *s, AVStream *st, AVPacket *pkt)
         return AVERROR(EINVAL);
     }
 
-    av_dlog(s, "av_write_frame: pts2:%s dts2:%s\n",
+    if (s->debug & FF_FDEBUG_TS)
+        av_log(s, AV_LOG_TRACE, "av_write_frame: pts2:%s dts2:%s\n",
             av_ts2str(pkt->pts), av_ts2str(pkt->dts));
+
     st->cur_dts = pkt->dts;
     st->pts.val = pkt->dts;
 
@@ -554,10 +557,11 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
     if (s->avoid_negative_ts > 0) {
         AVStream *st = s->streams[pkt->stream_index];
         int64_t offset = st->mux_ts_offset;
+        int64_t ts = s->internal->avoid_negative_ts_use_pts ? pkt->pts : pkt->dts;
 
-        if (s->internal->offset == AV_NOPTS_VALUE && pkt->dts != AV_NOPTS_VALUE &&
-            (pkt->dts < 0 || s->avoid_negative_ts == AVFMT_AVOID_NEG_TS_MAKE_ZERO)) {
-            s->internal->offset = -pkt->dts;
+        if (s->internal->offset == AV_NOPTS_VALUE && ts != AV_NOPTS_VALUE &&
+            (ts < 0 || s->avoid_negative_ts == AVFMT_AVOID_NEG_TS_MAKE_ZERO)) {
+            s->internal->offset = -ts;
             s->internal->offset_timebase = st->time_base;
         }
 
@@ -574,15 +578,26 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
         if (pkt->pts != AV_NOPTS_VALUE)
             pkt->pts += offset;
 
-        av_assert2(pkt->dts == AV_NOPTS_VALUE || pkt->dts >= 0 || s->max_interleave_delta > 0);
-        if (pkt->dts != AV_NOPTS_VALUE && pkt->dts < 0) {
-            av_log(s, AV_LOG_WARNING,
-                   "Packets poorly interleaved, failed to avoid negative "
-                   "timestamp %s in stream %d.\n"
-                   "Try -max_interleave_delta 0 as a possible workaround.\n",
-                   av_ts2str(pkt->dts),
-                   pkt->stream_index
-            );
+        if (s->internal->avoid_negative_ts_use_pts) {
+            if (pkt->pts != AV_NOPTS_VALUE && pkt->pts < 0) {
+                av_log(s, AV_LOG_WARNING, "failed to avoid negative "
+                    "pts %s in stream %d.\n"
+                    "Try -avoid_negative_ts 1 as a possible workaround.\n",
+                    av_ts2str(pkt->dts),
+                    pkt->stream_index
+                );
+            }
+        } else {
+            av_assert2(pkt->dts == AV_NOPTS_VALUE || pkt->dts >= 0 || s->max_interleave_delta > 0);
+            if (pkt->dts != AV_NOPTS_VALUE && pkt->dts < 0) {
+                av_log(s, AV_LOG_WARNING,
+                    "Packets poorly interleaved, failed to avoid negative "
+                    "timestamp %s in stream %d.\n"
+                    "Try -max_interleave_delta 0 as a possible workaround.\n",
+                    av_ts2str(pkt->dts),
+                    pkt->stream_index
+                );
+            }
         }
     }
 
@@ -876,8 +891,10 @@ int av_interleaved_write_frame(AVFormatContext *s, AVPacket *pkt)
     if (pkt) {
         AVStream *st = s->streams[pkt->stream_index];
 
-        av_dlog(s, "av_interleaved_write_frame size:%d dts:%s pts:%s\n",
+        if (s->debug & FF_FDEBUG_TS)
+            av_log(s, AV_LOG_TRACE, "av_interleaved_write_frame size:%d dts:%s pts:%s\n",
                 pkt->size, av_ts2str(pkt->dts), av_ts2str(pkt->pts));
+
         if ((ret = compute_pkt_fields2(s, st, pkt)) < 0 && !(s->oformat->flags & AVFMT_NOTIMESTAMPS))
             goto fail;
 
@@ -886,7 +903,7 @@ int av_interleaved_write_frame(AVFormatContext *s, AVPacket *pkt)
             goto fail;
         }
     } else {
-        av_dlog(s, "av_interleaved_write_frame FLUSH\n");
+        av_log(s, AV_LOG_TRACE, "av_interleaved_write_frame FLUSH\n");
         flush = 1;
     }
 

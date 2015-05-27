@@ -16,8 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AVDEVICE_OSS_AUDIO_H
-#define AVDEVICE_OSS_AUDIO_H
+#ifndef AVDEVICE_OSS_H
+#define AVDEVICE_OSS_H
 
 #include "libavcodec/avcodec.h"
 
@@ -42,4 +42,4 @@ int ff_oss_audio_open(AVFormatContext *s1, int is_output,
 
 int ff_oss_audio_close(OSSAudioData *s);
 
-#endif /* AVDEVICE_OSS_AUDIO_H */
+#endif /* AVDEVICE_OSS_H */

@@ -360,9 +360,13 @@ Optimization options (experts only):
   --disable-neon           disable NEON optimizations
   --disable-inline-asm     disable use of inline assembly
   --disable-yasm           disable use of nasm/yasm assembly
+  --disable-mips32r5       disable MIPS32R5 optimizations
+  --disable-mips64r6       disable MIPS64R6 optimizations
   --disable-mipsdspr1      disable MIPS DSP ASE R1 optimizations
   --disable-mipsdspr2      disable MIPS DSP ASE R2 optimizations
+  --disable-msa            disable MSA optimizations
   --disable-mipsfpu        disable floating point MIPS optimizations
+  --disable-loongson3      disable Loongson-3 SIMD optimizations
   --disable-fast-unaligned consider unaligned accesses slow
 
 Developer options (useful when working on FFmpeg itself):
@@ -392,6 +396,8 @@ Developer options (useful when working on FFmpeg itself):
                            (group) and PROB the probability associated with
                            NAME (default 0.5).
   --random-seed=VALUE      seed value for --enable/disable-random
+  --disable-valgrind-backtrace do not print a backtrace under Valgrind
+                           (only applies to --disable-optimizations builds)
 
 NOTE: Object files are built at the place where configure is launched.
 EOF
@@ -1509,6 +1515,7 @@ CONFIG_LIST="
     pod2man
     raise_major
     thumb
+    valgrind_backtrace
     xmm_clobber_test
 "
 
@@ -1565,8 +1572,15 @@ ARCH_EXT_LIST_ARM="
 ARCH_EXT_LIST_MIPS="
     mipsfpu
     mips32r2
+    mips32r5
+    mips64r6
     mipsdspr1
     mipsdspr2
+    msa
+"
+
+ARCH_EXT_LIST_LOONGSON="
+    loongson3
 "
 
 ARCH_EXT_LIST_X86_SIMD="
@@ -1606,7 +1620,7 @@ ARCH_EXT_LIST="
     $ARCH_EXT_LIST_PPC
     $ARCH_EXT_LIST_X86
     $ARCH_EXT_LIST_MIPS
-    loongson
+    $ARCH_EXT_LIST_LOONGSON
 "
 
 ARCH_FEATURES="
@@ -1680,6 +1694,7 @@ HEADERS_LIST="
     termios_h
     udplite_h
     unistd_h
+    valgrind_valgrind_h
     windows_h
     winsock2_h
 "
@@ -2009,8 +2024,15 @@ map 'eval ${v}_inline_deps=inline_asm' $ARCH_EXT_LIST_ARM
 mipsfpu_deps="mips"
 mipsdspr1_deps="mips"
 mipsdspr2_deps="mips"
+mips32r2_deps="mips"
+mips32r5_deps="mips"
+mips64r6_deps="mips"
+msa_deps="mips"
+loongson3_deps="mips"
 
 altivec_deps="ppc"
+dcbzl_deps="ppc"
+ldbrx_deps="ppc"
 ppc4xx_deps="ppc"
 vsx_deps="ppc"
 
@@ -2053,8 +2075,8 @@ fast_unaligned_if_any="aarch64 ppc x86"
 simd_align_16_if_any="altivec neon sse"
 
 # system capabilities
-
 symver_if_any="symver_asm_label symver_gnu_asm"
+valgrind_backtrace_deps="!optimizations valgrind_valgrind_h"
 
 # threading support
 atomics_gcc_if_any="sync_val_compare_and_swap atomic_compare_exchange"
@@ -2152,6 +2174,7 @@ h261_encoder_select="aandcttables mpegvideoenc"
 h263_decoder_select="error_resilience h263_parser h263dsp mpeg_er mpegvideo qpeldsp"
 h263_encoder_select="aandcttables h263dsp mpegvideoenc"
 h263i_decoder_select="h263_decoder"
+h263p_decoder_select="h263_decoder"
 h263p_encoder_select="h263_encoder"
 h264_decoder_select="cabac golomb h264chroma h264dsp h264pred h264qpel startcode videodsp"
 h264_decoder_suggest="error_resilience"
@@ -2524,7 +2547,7 @@ decklink_outdev_extralibs="-lstdc++"
 decklink_indev_deps="decklink pthreads"
 decklink_indev_extralibs="-lstdc++"
 dshow_indev_deps="IBaseFilter"
-dshow_indev_extralibs="-lpsapi -lole32 -lstrmiids -luuid -loleaut32"
+dshow_indev_extralibs="-lpsapi -lole32 -lstrmiids -luuid -loleaut32 -lshlwapi"
 dv1394_indev_deps="dv1394"
 dv1394_indev_select="dv_demuxer"
 fbdev_indev_deps="linux_fb_h"
@@ -2613,6 +2636,7 @@ blackframe_filter_deps="gpl"
 boxblur_filter_deps="gpl"
 bs2b_filter_deps="libbs2b"
 colormatrix_filter_deps="gpl"
+cover_rect_filter_deps="avcodec avformat gpl"
 cropdetect_filter_deps="gpl"
 delogo_filter_deps="gpl"
 deshake_filter_select="pixelutils"
@@ -2622,6 +2646,7 @@ eq_filter_deps="gpl"
 fftfilt_filter_deps="avcodec"
 fftfilt_filter_select="rdft"
 flite_filter_deps="libflite"
+find_rect_filter_deps="avcodec avformat gpl"
 frei0r_filter_deps="frei0r dlopen"
 frei0r_src_filter_deps="frei0r dlopen"
 fspp_filter_deps="gpl"
@@ -2782,6 +2807,7 @@ enable runtime_cpudetect
 enable safe_bitstream_reader
 enable static
 enable swscale_alpha
+enable valgrind_backtrace
 
 sws_max_filter_size_default=256
 set_default sws_max_filter_size
@@ -3513,7 +3539,7 @@ probe_cc(){
         _flags_filter=armasm_flags
     elif $_cc 2>&1 | grep -q Intel; then
         _type=icl
-        _ident=$($cc 2>&1 | head -n1)
+        _ident=$($_cc 2>&1 | head -n1)
         _depflags='-QMMD -QMF$(@:.o=.d) -QMT$@'
         # Not only is O3 broken on 13.x+ but it is slower on all previous
         # versions (tested) as well.
@@ -3540,7 +3566,7 @@ probe_cc(){
         disable stripping
     elif $_cc 2>&1 | grep -q Microsoft; then
         _type=msvc
-        _ident=$($cc 2>&1 | head -n1)
+        _ident=$($_cc 2>&1 | head -n1)
         _DEPCMD='$(DEP$(1)) $(DEP$(1)FLAGS) $($(1)DEP_FLAGS) $< 2>&1 | awk '\''/including/ { sub(/^.*file: */, ""); gsub(/\\/, "/"); if (!match($$0, / /)) print "$@:", $$0 }'\'' > $(@:.o=.d)'
         _DEPFLAGS='$(CPPFLAGS) $(CFLAGS) -showIncludes -Zs'
         _cflags_speed="-O2"
@@ -3842,23 +3868,80 @@ elif enabled mips; then
 
     case $cpu in
         24kc)
+            disable mips32r5
+            disable mips64r6
             disable mipsfpu
             disable mipsdspr1
             disable mipsdspr2
+            disable msa
         ;;
         24kf*)
+            disable mips32r5
+            disable mips64r6
             disable mipsdspr1
             disable mipsdspr2
+            disable msa
         ;;
         24kec|34kc|1004kc)
+            disable mips32r5
+            disable mips64r6
             disable mipsfpu
             disable mipsdspr2
+            disable msa
         ;;
         24kef*|34kf*|1004kf*)
+            disable mips32r5
+            disable mips64r6
             disable mipsdspr2
+            disable msa
         ;;
         74kc)
+            disable mips32r5
+            disable mips64r6
             disable mipsfpu
+            disable msa
+        ;;
+        74kf)
+            disable mips32r5
+            disable mips64r6
+            disable msa
+        ;;
+        p5600)
+            disable mips64r6
+            disable mipsdspr1
+            disable mipsdspr2
+
+            check_cflags "-mtune=p5600"
+        ;;
+        i6400)
+            disable mips32r5
+            disable mipsdspr1
+            disable mipsdspr2
+            disable mipsfpu
+
+            check_cflags "-mtune=i6400 -mabi=64"
+            check_ldflags "-mabi=64"
+        ;;
+        loongson3*)
+            enable mipsfpu
+            disable mips32r2
+            disable mips32r5
+            disable mips64r6
+            disable mipsdspr1
+            disable mipsdspr2
+            disable msa
+            enable local_aligned_8 local_aligned_16
+            enable simd_align_16
+            enable fast_64bit
+            enable fast_clz
+            enable fast_cmov
+            enable fast_unaligned
+            disable aligned_stack
+        ;;
+        generic)
+            disable mips32r5
+            disable mips64r6
+            disable msa
         ;;
     esac
 
@@ -4219,11 +4302,10 @@ case $target_os in
         SLIBNAME_WITH_VERSION='$(SLIBPREF)$(NAME)-$(LIBVERSION)$(SLIBSUF)'
         SLIBNAME_WITH_MAJOR='$(SLIBPREF)$(shell echo $(NAME) | cut -c1-6)$(LIBMAJOR)$(SLIBSUF)'
         SLIB_CREATE_DEF_CMD='echo LIBRARY $(SLIBNAME_WITH_MAJOR) INITINSTANCE TERMINSTANCE > $(SUBDIR)$(NAME).def; \
-            echo PROTMODE >> $(SUBDIR)$(NAME).def; \
             echo CODE PRELOAD MOVEABLE DISCARDABLE >> $(SUBDIR)$(NAME).def; \
             echo DATA PRELOAD MOVEABLE MULTIPLE NONSHARED >> $(SUBDIR)$(NAME).def; \
             echo EXPORTS >> $(SUBDIR)$(NAME).def; \
-            emxexp -o $(OBJS) >> $(SUBDIR)$(NAME).def'
+            emxexp $(OBJS) >> $(SUBDIR)$(NAME).def'
         SLIB_EXTRA_CMD='emximp -o $(SUBDIR)$(LIBPREF)$(NAME)_dll.a $(SUBDIR)$(NAME).def; \
             emximp -o $(SUBDIR)$(LIBPREF)$(NAME)_dll.lib $(SUBDIR)$(NAME).def;'
         SLIB_INSTALL_EXTRA_LIB='$(LIBPREF)$(NAME)_dll.a $(LIBPREF)$(NAME)_dll.lib'
@@ -4604,26 +4686,40 @@ EOF
 
 elif enabled mips; then
 
-    check_inline_asm loongson '"dmult.g $1, $2, $3"'
-
     # Enable minimum ISA based on selected options
     if enabled mips64 && (enabled mipsdspr1 || enabled mipsdspr2); then
         add_cflags "-mips64r2"
         add_asflags "-mips64r2"
-    elif enabled mips64 && enabled mipsfpu; then
+    elif enabled mips64 && enabled mipsfpu && disabled loongson3; then
         add_cflags "-mips64"
         add_asflags "-mips64"
-    elif enabled mipsfpu || enabled mipsdspr1 || enabled mipsdspr2; then
-        add_cflags "-mips32r2"
-        add_asflags "-mips32r2"
+    elif enabled mipsdspr1 || enabled mipsdspr2; then
+        add_cflags "-mips32r2 -mfp32"
+        add_asflags "-mips32r2 -mfp32"
+    elif enabled mips32r5 || enabled mips64r6; then
+        check_cflags "-mfp64"
+        check_ldflags "-mfp64"
     fi
 
+    enabled mips32r5  && check_cflags "-mips32r5 -msched-weight -mload-store-pairs -funroll-loops" &&
+     check_ldflags "-mips32r5" &&
+     check_inline_asm mips32r5  '"ulw $t0, ($t1)"'
+    enabled mips64r6  && check_cflags "-mips64r6 -msched-weight -mload-store-pairs -funroll-loops" &&
+     check_ldflags "-mips64r6" &&
+     check_inline_asm mips64r6  '"aui $t0, $t1, 1"'
     enabled mipsdspr1 && add_cflags "-mdsp" && add_asflags "-mdsp" &&
      check_inline_asm mipsdspr1 '"addu.qb $t0, $t1, $t2"'
     enabled mipsdspr2 && add_cflags "-mdspr2" && add_asflags "-mdspr2" &&
      check_inline_asm mipsdspr2 '"absq_s.qb $t0, $t1"'
     enabled mipsfpu   && add_cflags "-mhard-float" && add_asflags "-mhard-float" &&
      check_inline_asm mipsfpu   '"madd.d $f0, $f2, $f4, $f6"'
+    enabled msa       && check_cflags "-mmsa" && check_ldflags "-mmsa" &&
+     check_inline_asm msa       '"addvi.b $w0, $w1, 1"'
+    enabled loongson3 && check_inline_asm loongson3 '"gsldxc1 $f0, 0($2, $3)"'
+
+    enabled mips32r5 && add_asflags "-mips32r5 -mfp64"
+    enabled mips64r6 && add_asflags "-mips64r6 -mfp64"
+    enabled msa && add_asflags "-mmsa"
 
 elif enabled parisc; then
 
@@ -4863,6 +4959,7 @@ check_header sys/time.h
 check_header sys/un.h
 check_header termios.h
 check_header unistd.h
+check_header valgrind/valgrind.h
 check_header vdpau/vdpau.h
 check_header vdpau/vdpau_x11.h
 check_header VideoDecodeAcceleration/VDADecoder.h
@@ -4946,7 +5043,7 @@ enabled libcelt           && require libcelt celt/celt.h celt_decode -lcelt0 &&
                              { check_lib celt/celt.h celt_decoder_create_custom -lcelt0 ||
                                die "ERROR: libcelt must be installed and version must be >= 0.11.0."; }
 enabled libcaca           && require_pkg_config caca caca.h caca_create_canvas
-enabled libdcadec         && require libdcadec libdcadec/dca_context.h dcadec_context_create -ldcadec
+enabled libdcadec         && require_pkg_config dcadec libdcadec/dca_context.h dcadec_context_create
 enabled libfaac           && require2 libfaac "stdint.h faac.h" faacEncGetVersion -lfaac
 enabled libfdk_aac        && require libfdk_aac fdk-aac/aacenc_lib.h aacEncOpen -lfdk-aac
 flite_libs="-lflite_cmu_time_awb -lflite_cmu_us_awb -lflite_cmu_us_kal -lflite_cmu_us_kal16 -lflite_cmu_us_rms -lflite_cmu_us_slt -lflite_usenglish -lflite_cmulex -lflite"
@@ -5011,8 +5108,8 @@ enabled libx264           && { use_pkg_config x264 "stdint.h x264.h" x264_encode
                              { check_cpp_condition x264.h "X264_BUILD >= 118" ||
                                die "ERROR: libx264 must be installed and version must be >= 0.118."; }
 enabled libx265           && require_pkg_config x265 x265.h x265_encoder_encode &&
-                             { check_cpp_condition x265.h "X265_BUILD >= 17" ||
-                               die "ERROR: libx265 version must be >= 17."; }
+                             { check_cpp_condition x265.h "X265_BUILD >= 57" ||
+                               die "ERROR: libx265 version must be >= 57."; }
 enabled libxavs           && require libxavs xavs.h xavs_encoder_encode -lxavs
 enabled libxvid           && require libxvid xvid.h xvid_global -lxvidcore
 enabled libzmq            && require_pkg_config libzmq zmq.h zmq_ctx_new
@@ -5407,7 +5504,7 @@ elif enabled_any msvc icl; then
             disable ebx_available
         fi
     fi
-    # msvcrt10 x64 incorrectly enables log2, only msvcrt12 onwards actually has log2.
+    # msvcrt10 x64 incorrectly enables log2, only msvcrt12 (MSVC 2013) onwards actually has log2.
     check_cpp_condition crtversion.h "_VC_CRT_MAJOR_VERSION >= 12" || disable log2
 fi
 
@@ -5500,9 +5597,11 @@ enabled amovie_filter       && prepend avfilter_deps "avformat avcodec"
 enabled aresample_filter    && prepend avfilter_deps "swresample"
 enabled asyncts_filter      && prepend avfilter_deps "avresample"
 enabled atempo_filter       && prepend avfilter_deps "avcodec"
+enabled cover_rect_filter   && prepend avfilter_deps "avformat avcodec"
 enabled ebur128_filter && enabled swresample && prepend avfilter_deps "swresample"
 enabled elbg_filter         && prepend avfilter_deps "avcodec"
 enabled fftfilt_filter      && prepend avfilter_deps "avcodec"
+enabled find_rect_filter    && prepend avfilter_deps "avformat avcodec"
 enabled mcdeint_filter      && prepend avfilter_deps "avcodec"
 enabled movie_filter    && prepend avfilter_deps "avformat avcodec"
 enabled pan_filter          && prepend avfilter_deps "swresample"
@@ -5583,8 +5682,12 @@ if enabled arm; then
 fi
 if enabled mips; then
     echo "MIPS FPU enabled          ${mipsfpu-no}"
+    echo "MIPS32R5 enabled          ${mips32r5-no}"
+    echo "MIPS64R6 enabled          ${mips64r6-no}"
     echo "MIPS DSP R1 enabled       ${mipsdspr1-no}"
     echo "MIPS DSP R2 enabled       ${mipsdspr2-no}"
+    echo "MIPS MSA enabled          ${msa-no}"
+    echo "LOONGSON3 enabled         ${loongson3-no}"
 fi
 if enabled ppc; then
     echo "AltiVec enabled           ${altivec-no}"

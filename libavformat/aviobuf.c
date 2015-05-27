@@ -805,7 +805,7 @@ int ffio_ensure_seekback(AVIOContext *s, int64_t buf_size)
 
     buf_size += s->buf_ptr - s->buffer + max_buffer_size;
 
-    if (buf_size < filled || s->seekable)
+    if (buf_size < filled || s->seekable || !s->read_packet)
         return 0;
     av_assert0(!s->write_flag);
 
@@ -916,6 +916,12 @@ int avio_open2(AVIOContext **s, const char *filename, int flags,
         return err;
     }
     return 0;
+}
+
+int ffio_open2_wrapper(struct AVFormatContext *s, AVIOContext **pb, const char *url, int flags,
+                       const AVIOInterruptCB *int_cb, AVDictionary **options)
+{
+    return avio_open2(pb, url, flags, int_cb, options);
 }
 
 int avio_close(AVIOContext *s)

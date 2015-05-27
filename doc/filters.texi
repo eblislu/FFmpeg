@@ -8,13 +8,13 @@ outputs.
 To illustrate the sorts of things that are possible, we consider the
 following filtergraph.
 
-@example
+@verbatim
                 [main]
 input --> split ---------------------> overlay --> output
             |                             ^
             |[tmp]                  [flip]|
             +-----> crop --> vflip -------+
-@end example
+@end verbatim
 
 This filtergraph splits the input stream in two streams, then sends one
 stream through the crop filter and the vflip filter, before merging it
@@ -1319,6 +1319,61 @@ ffmpeg -i in.wav -filter_complex
 front_center.wav -map '[LFE]' lfe.wav -map '[SL]' side_left.wav -map '[SR]'
 side_right.wav
 @end example
+
+@section chorus
+Add a chorus effect to the audio.
+
+Can make a single vocal sound like a chorus, but can also be applied to instrumentation.
+
+Chorus resembles an echo effect with a short delay, but whereas with echo the delay is
+constant, with chorus, it is varied using using sinusoidal or triangular modulation.
+The modulation depth defines the range the modulated delay is played before or after
+the delay. Hence the delayed sound will sound slower or faster, that is the delayed
+sound tuned around the original one, like in a chorus where some vocals are slightly
+off key.
+
+It accepts the following parameters:
+@table @option
+@item in_gain
+Set input gain. Default is 0.4.
+
+@item out_gain
+Set output gain. Default is 0.4.
+
+@item delays
+Set delays. A typical delay is around 40ms to 60ms.
+
+@item decays
+Set decays.
+
+@item speeds
+Set speeds.
+
+@item depths
+Set depths.
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+A single delay:
+@example
+chorus=0.7:0.9:55:0.4:0.25:2
+@end example
+
+@item
+Two delays:
+@example
+chorus=0.6:0.9:50|60:0.4|0.32:0.25|0.4:2|1.3
+@end example
+
+@item
+Fuller sounding chorus with three delays:
+@example
+chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3
+@end example
+@end itemize
 
 @section compand
 Compress or expand the audio's dynamic range.
@@ -4002,6 +4057,16 @@ The font family to be used for drawing text. By default Sans.
 The font file to be used for drawing text. The path must be included.
 This parameter is mandatory if the fontconfig support is disabled.
 
+@item draw
+This option does not exist, please see the timeline system
+
+@item alpha
+Draw the text applying alpha blending. The value can
+be either a number between 0.0 and 1.0
+The expression accepts the same variables @var{x, y} do.
+The default value is 1.
+Please see fontcolor_expr
+
 @item fontsize
 The font size to be used for drawing text.
 The default value of @var{fontsize} is 16.
@@ -5097,6 +5162,70 @@ It is mainly useful when auto-inserted by the libavfilter
 framework.
 
 It does not take parameters.
+
+@section find_rect
+
+Find a rectangular object
+
+It accepts the following options:
+
+@table @option
+@item object
+Filepath of the object image, needs to be in gray8.
+
+@item threshold
+Detection threshold, default is 0.5.
+
+@item mipmaps
+Number of mipmaps, default is 3.
+
+@item xmin, ymin, xmax, ymax
+Specifies the rectangle in which to search.
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Generate a representative palette of a given video using @command{ffmpeg}:
+@example
+ffmpeg -i file.ts -vf find_rect=newref.pgm,cover_rect=cover.jpg:mode=cover new.mkv
+@end example
+@end itemize
+
+@section cover_rect
+
+Cover a rectangular object
+
+It accepts the following options:
+
+@table @option
+@item cover
+Filepath of the optional cover image, needs to be in yuv420.
+
+@item mode
+Set covering mode.
+
+It accepts the following values:
+@table @samp
+@item cover
+cover it by the supplied image
+@item blur
+cover it by interpolating the surrounding pixels
+@end table
+
+Default value is @var{blur}.
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Generate a representative palette of a given video using @command{ffmpeg}:
+@example
+ffmpeg -i file.ts -vf find_rect=newref.pgm,cover_rect=cover.jpg:mode=cover new.mkv
+@end example
+@end itemize
 
 @anchor{format}
 @section format

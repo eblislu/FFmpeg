@@ -1852,7 +1852,7 @@ int ff_mpv_frame_start(MpegEncContext *s, AVCodecContext *avctx)
         if (!s->droppable)
             s->next_picture_ptr = s->current_picture_ptr;
     }
-    av_dlog(s->avctx, "L%p N%p C%p L%p N%p C%p type:%d drop:%d\n",
+    ff_dlog(s->avctx, "L%p N%p C%p L%p N%p C%p type:%d drop:%d\n",
             s->last_picture_ptr, s->next_picture_ptr,s->current_picture_ptr,
             s->last_picture_ptr    ? s->last_picture_ptr->f->data[0]    : NULL,
             s->next_picture_ptr    ? s->next_picture_ptr->f->data[0]    : NULL,
@@ -1896,11 +1896,13 @@ int ff_mpv_frame_start(MpegEncContext *s, AVCodecContext *avctx)
             for(i=0; i<avctx->height; i++)
                 memset(s->last_picture_ptr->f->data[0] + s->last_picture_ptr->f->linesize[0]*i,
                        0x80, avctx->width);
-            for(i=0; i<FF_CEIL_RSHIFT(avctx->height, v_chroma_shift); i++) {
-                memset(s->last_picture_ptr->f->data[1] + s->last_picture_ptr->f->linesize[1]*i,
-                       0x80, FF_CEIL_RSHIFT(avctx->width, h_chroma_shift));
-                memset(s->last_picture_ptr->f->data[2] + s->last_picture_ptr->f->linesize[2]*i,
-                       0x80, FF_CEIL_RSHIFT(avctx->width, h_chroma_shift));
+            if (s->last_picture_ptr->f->data[2]) {
+                for(i=0; i<FF_CEIL_RSHIFT(avctx->height, v_chroma_shift); i++) {
+                    memset(s->last_picture_ptr->f->data[1] + s->last_picture_ptr->f->linesize[1]*i,
+                        0x80, FF_CEIL_RSHIFT(avctx->width, h_chroma_shift));
+                    memset(s->last_picture_ptr->f->data[2] + s->last_picture_ptr->f->linesize[2]*i,
+                        0x80, FF_CEIL_RSHIFT(avctx->width, h_chroma_shift));
+                }
             }
 
             if(s->codec_id == AV_CODEC_ID_FLV1 || s->codec_id == AV_CODEC_ID_H263){
@@ -3276,8 +3278,10 @@ void mpv_decode_mb_internal(MpegEncContext *s, int16_t block[12][64],
 skip_idct:
         if(!readable){
             s->hdsp.put_pixels_tab[0][0](s->dest[0], dest_y ,   linesize,16);
-            s->hdsp.put_pixels_tab[s->chroma_x_shift][0](s->dest[1], dest_cb, uvlinesize,16 >> s->chroma_y_shift);
-            s->hdsp.put_pixels_tab[s->chroma_x_shift][0](s->dest[2], dest_cr, uvlinesize,16 >> s->chroma_y_shift);
+            if (!CONFIG_GRAY || !(s->flags & CODEC_FLAG_GRAY)) {
+                s->hdsp.put_pixels_tab[s->chroma_x_shift][0](s->dest[1], dest_cb, uvlinesize,16 >> s->chroma_y_shift);
+                s->hdsp.put_pixels_tab[s->chroma_x_shift][0](s->dest[2], dest_cr, uvlinesize,16 >> s->chroma_y_shift);
+            }
         }
     }
 }

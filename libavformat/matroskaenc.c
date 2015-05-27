@@ -120,6 +120,7 @@ typedef struct MatroskaMuxContext {
     int64_t cluster_time_limit;
     int is_dash;
     int dash_track_number;
+    int is_live;
 
     uint32_t chapter_id_offset;
     int wrote_chapters;
@@ -545,12 +546,15 @@ static int put_flac_codecpriv(AVFormatContext *s,
                              "Lavf" : LIBAVFORMAT_IDENT;
         AVDictionary *dict = NULL;
         uint8_t buf[32], *data, *p;
-        int len;
+        int64_t len;
 
         snprintf(buf, sizeof(buf), "0x%"PRIx64, codec->channel_layout);
         av_dict_set(&dict, "WAVEFORMATEXTENSIBLE_CHANNEL_MASK", buf, 0);
 
         len = ff_vorbiscomment_length(dict, vendor);
+        if (len >= ((1<<24) - 4))
+            return AVERROR(EINVAL);
+
         data = av_malloc(len + 4);
         if (!data) {
             av_dict_free(&dict);
@@ -941,6 +945,7 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
             // if there is no mkv-specific codec ID, use VFW mode
             put_ebml_string(pb, MATROSKA_ID_CODECID, "V_MS/VFW/FOURCC");
             mkv->tracks[i].write_dts = 1;
+            s->internal->avoid_negative_ts_use_pts = 0;
         }
 
         subinfo = start_ebml_master(pb, MATROSKA_ID_TRACKVIDEO, 0);
@@ -1321,8 +1326,10 @@ static int mkv_write_header(AVFormatContext *s)
     else
         mkv->mode = MODE_MATROSKAv2;
 
-    if (s->avoid_negative_ts < 0)
+    if (s->avoid_negative_ts < 0) {
         s->avoid_negative_ts = 1;
+        s->internal->avoid_negative_ts_use_pts = 1;
+    }
 
     if (mkv->mode != MODE_WEBM ||
         av_dict_get(s->metadata, "stereo_mode", NULL, 0) ||
@@ -1412,7 +1419,9 @@ static int mkv_write_header(AVFormatContext *s)
     // reserve space for the duration
     mkv->duration = 0;
     mkv->duration_offset = avio_tell(pb);
-    put_ebml_void(pb, 11);                  // assumes double-precision float to be written
+    if (!mkv->is_live) {
+        put_ebml_void(pb, 11);              // assumes double-precision float to be written
+    }
     end_ebml_master(pb, segment_info);
 
     ret = mkv_write_tracks(s);
@@ -1436,7 +1445,7 @@ static int mkv_write_header(AVFormatContext *s)
             return ret;
     }
 
-    if (!s->pb->seekable)
+    if (!s->pb->seekable && !mkv->is_live)
         mkv_write_seekhead(pb, mkv->main_seekhead);
 
     mkv->cues = mkv_start_cues(mkv->segment_offset);
@@ -1955,7 +1964,9 @@ static int mkv_write_trailer(AVFormatContext *s)
         avio_seek(pb, currentpos, SEEK_SET);
     }
 
-    end_ebml_master(pb, mkv->segment);
+    if (!mkv->is_live) {
+        end_ebml_master(pb, mkv->segment);
+    }
     av_freep(&mkv->tracks);
     av_freep(&mkv->cues->entries);
     av_freep(&mkv->cues);
@@ -2019,6 +2030,7 @@ static const AVOption options[] = {
     { "cluster_time_limit",  "Store at most the provided number of milliseconds in a cluster.",                               OFFSET(cluster_time_limit), AV_OPT_TYPE_INT64, { .i64 = -1 }, -1, INT64_MAX, FLAGS },
     { "dash", "Create a WebM file conforming to WebM DASH specification", OFFSET(is_dash), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, FLAGS },
     { "dash_track_number", "Track number for the DASH stream", OFFSET(dash_track_number), AV_OPT_TYPE_INT, { .i64 = 1 }, 0, 127, FLAGS },
+    { "live", "Write files assuming it is a live stream.", OFFSET(is_live), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, FLAGS },
     { "allow_raw_vfw", "allow RAW VFW mode", OFFSET(allow_raw_vfw), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, FLAGS },
     { NULL },
 };

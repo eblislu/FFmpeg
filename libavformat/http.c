@@ -128,13 +128,14 @@ static const AVOption options[] = {
     { "end_offset", "try to limit the request to bytes preceding this offset", OFFSET(end_off), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "method", "Override the HTTP method", OFFSET(method), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "reconnect", "auto reconnect after disconnect before EOF", OFFSET(reconnect), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, D },
-    { "listen", "listen on HTTP", OFFSET(listen), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, E },
+    { "listen", "listen on HTTP", OFFSET(listen), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, D | E },
     { NULL }
 };
 
 static int http_connect(URLContext *h, const char *path, const char *local_path,
                         const char *hoststr, const char *auth,
                         const char *proxyauth, int *new_location);
+static int http_read_header(URLContext *h, int *new_location);
 
 void ff_http_init_auth_state(URLContext *dest, const URLContext *src)
 {
@@ -303,12 +304,15 @@ static int http_listen(URLContext *h, const char *uri, int flags,
     HTTPContext *s = h->priv_data;
     int ret;
     static const char header[] = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
-    char hostname[1024];
+    char hostname[1024], proto[10];
     char lower_url[100];
-    int port;
-    av_url_split(NULL, 0, NULL, 0, hostname, sizeof(hostname), &port,
+    const char *lower_proto = "tcp";
+    int port, new_location;
+    av_url_split(proto, sizeof(proto), NULL, 0, hostname, sizeof(hostname), &port,
                  NULL, 0, uri);
-    ff_url_join(lower_url, sizeof(lower_url), "tcp", NULL, hostname, port,
+    if (!strcmp(proto, "https"))
+        lower_proto = "tls";
+    ff_url_join(lower_url, sizeof(lower_url), lower_proto, NULL, hostname, port,
                 NULL);
     av_dict_set(options, "listen", "1", 0);
     if ((ret = ffurl_open(&s->hd, lower_url, AVIO_FLAG_READ_WRITE,
@@ -316,6 +320,8 @@ static int http_listen(URLContext *h, const char *uri, int flags,
         goto fail;
     if ((ret = ffurl_write(s->hd, header, strlen(header))) < 0)
         goto fail;
+    if ((ret = http_read_header(h, &new_location)) < 0)
+         goto fail;
     return 0;
 
 fail:
@@ -556,7 +562,7 @@ static int process_line(URLContext *h, char *line, int line_count,
             p++;
         s->http_code = strtol(p, &end, 10);
 
-        av_log(h, AV_LOG_DEBUG, "http_code=%d\n", s->http_code);
+        av_log(h, AV_LOG_TRACE, "http_code=%d\n", s->http_code);
 
         if ((ret = check_http_code(h, s->http_code, end)) < 0)
             return ret;
@@ -745,7 +751,7 @@ static int http_read_header(URLContext *h, int *new_location)
         if ((err = http_get_line(s, line, sizeof(line))) < 0)
             return err;
 
-        av_log(h, AV_LOG_DEBUG, "header='%s'\n", line);
+        av_log(h, AV_LOG_TRACE, "header='%s'\n", line);
 
         err = process_line(h, line, s->line_count, new_location);
         if (err < 0)
@@ -914,6 +920,9 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     if (err < 0)
         goto done;
 
+    if (*new_location)
+        s->off = off;
+
     err = (off == s->off) ? 0 : -1;
 done:
     av_freep(&authstr);
@@ -937,6 +946,14 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
             s->filesize >= 0 && s->off >= s->filesize)
             return AVERROR_EOF;
         len = ffurl_read(s->hd, buf, size);
+        if (!len && (!s->willclose || s->chunksize < 0) &&
+            s->filesize >= 0 && s->off < s->filesize) {
+            av_log(h, AV_LOG_ERROR,
+                   "Stream ends prematurely at %"PRId64", should be %"PRId64"\n",
+                   s->off, s->filesize
+                  );
+            return AVERROR(EIO);
+        }
     }
     if (len > 0) {
         s->off += len;
@@ -1006,7 +1023,7 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
 
                 s->chunksize = strtoll(line, NULL, 16);
 
-                av_dlog(NULL, "Chunked encoding data size: %"PRId64"'\n",
+                av_log(NULL, AV_LOG_TRACE, "Chunked encoding data size: %"PRId64"'\n",
                         s->chunksize);
 
                 if (!s->chunksize)

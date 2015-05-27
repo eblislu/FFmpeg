@@ -114,7 +114,7 @@ static void flush_packet(AVFormatContext *format_context, AVPacket *packet)
         uint8_t *existing_acTL_chunk;
         uint8_t *existing_fcTL_chunk;
 
-        av_log(format_context, AV_LOG_WARNING, "Only a single frame so saving as a normal PNG.\n");
+        av_log(format_context, AV_LOG_INFO, "Only a single frame so saving as a normal PNG.\n");
 
         // Write normal PNG headers without acTL chunk
         existing_acTL_chunk = apng_find_chunk(MKBETAG('a', 'c', 'T', 'L'), codec_context->extradata, codec_context->extradata_size);
@@ -259,7 +259,7 @@ AVOutputFormat ff_apng_muxer = {
     .name           = "apng",
     .long_name      = NULL_IF_CONFIG_SMALL("Animated Portable Network Graphics"),
     .mime_type      = "image/png",
-    .extensions     = "png",
+    .extensions     = "apng",
     .priv_data_size = sizeof(APNGMuxContext),
     .audio_codec    = AV_CODEC_ID_NONE,
     .video_codec    = AV_CODEC_ID_APNG,
